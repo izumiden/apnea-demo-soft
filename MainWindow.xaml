@@ -6,9 +6,30 @@
         xmlns:oxy="http://oxyplot.org/wpf"
         xmlns:local="clr-namespace:apnea_demo"
         mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
-        <oxy:PlotView Name="PlotView" Model="{Binding PlotModel}" />
-        <Label x:Name="label" Content="{Binding DeviceInfo}" Margin="10,0,0,0" VerticalAlignment="Top"/>
-    </Grid>
+        Title="MainWindow" Height="720" Width="1280">
+    <DockPanel>
+        <StatusBar DockPanel.Dock="Bottom" Height="22" Background="Gray">
+            <StatusBarItem>
+                <StackPanel Orientation="Horizontal">
+                    <Ellipse Width="10" Height="10" Fill="{Binding ConnectionStatusColor}" Margin="10,0,0,0"/>
+                    <TextBlock Text="{Binding ConnectionStatus}" VerticalAlignment="Center"/>
+                </StackPanel>
+            </StatusBarItem>
+        </StatusBar>
+        <Grid DockPanel.Dock="Top" Height="150">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="2*"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Margin="10">
+                <Label Content="Device Info:" FontWeight="Bold"/>
+                <TextBlock Text="{Binding DeviceInfo}"/>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Margin="10">
+                <Label Content="Logs:" FontWeight="Bold"/>
+                <TextBox Text="{Binding DeviceLogs}" Height="100" VerticalScrollBarVisibility="Auto" IsReadOnly="True"/>
+            </StackPanel>
+        </Grid>
+        <oxy:PlotView Name="PlotView" Model="{Binding PlotModel}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+    </DockPanel>
 </Window>

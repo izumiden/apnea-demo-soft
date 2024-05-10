@@ -9,7 +9,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
-using System.Windows.Shapes;
 using System.Windows.Threading;
 
 namespace apnea_demo
@@ -35,22 +34,21 @@ namespace apnea_demo
             }
         }
 
+        public double PointSeconds { get; set; } = 0.5;
+
+        public double MovingAveragePeriod { get; set; } = 1.2;
+
+        public int ApneaThreshold { get; set; } = 100;
+
         public PlotModel PlotModel { get; set; }
 
-        public int AxisSecondsMaximum { get; set; } = 10;
+        public int AxisSecondsMaximum { get; set; } = 60;
 
-        public int AxisSecondsMinimum { get; set; } = -120;
+        public int AxisSecondsMinimum { get; set; } = -240;
 
-        public int AxisValueMaximum { get; set; } = 8000;
+        public int AxisValueMaximum { get; set; } = 5000;
 
-        public int AxisValueMinimum { get; set; } = -8000;
-
-
-        public int MovingAveragePeriod { get; set; } = 10;
-
-        public int ApneaThreshold { get; set; } = 1000;
-
-        public int NumberOfStandingValues { get; set; } = 25;
+        public int AxisValueMinimum { get; set; } = -2000;
 
         private bool _autoScroll = true;
         public bool IsAutoScroll
@@ -60,7 +58,7 @@ namespace apnea_demo
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
-        private ConcurrentQueue<Tuple<int, int, int>> _dataQueue = new ConcurrentQueue<Tuple<int, int, int>>();
+        private ConcurrentQueue<Tuple<DateTime, int, int, int>> _dataQueue = new ConcurrentQueue<Tuple<DateTime, int, int, int>>();
 
 
         protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
@@ -82,7 +80,7 @@ namespace apnea_demo
                 Position = AxisPosition.Bottom,
                 StringFormat = "HH:mm",  // 時間と分の表示
                 IntervalType = DateTimeIntervalType.Minutes,
-                IntervalLength = 60000,  // 軸の間隔のピクセル数
+                IntervalLength = (60 * 2) / PointSeconds,  // 軸の間隔のピクセル数
                 Minimum = now.AddSeconds(AxisSecondsMinimum).ToOADate(),
                 Maximum = now.AddSeconds(AxisSecondsMaximum).ToOADate(),
             });
@@ -127,75 +125,80 @@ namespace apnea_demo
             {
                 // 無呼吸の判定用
                 bool isApnea = false;
+                // 移動平均計算用
 
                 // 移動平均の値を保持するリスト
-                var movingAverageValues = new List<int>();
+                var movingAverageValues = new List<Tuple<DateTime, int>>();
                 // 現在のラインのデータを保持するリスト
-                var currentLineDataPoints = new List<DataPoint>();
+                var currentLine = new List<DataPoint>();
+
+                DateTime? lastTime = null;
+                //(DateTime time, int value)? lastCoordinate = null;
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     if (_dataQueue.TryDequeue(out var data))
                     {
+                        DateTime time = data.Item1;
                         try
                         {
-                            var now = DateTime.Now;
-                            var time = now.ToOADate();
-                            var timeMin = now.AddSeconds(AxisSecondsMinimum).ToOADate();
-                            var timeMax = now.AddSeconds(AxisSecondsMaximum).ToOADate();
-
-                            int x = data.Item1;
-                            int y = data.Item2;
-                            int z = data.Item3;
-                            int sum = 0;
-                            int val = 0;
+                            DateTime nextTime;
 
                             // 無呼吸状態を退避
-                            bool finalApenaStatus = isApnea;
+                            Boolean preApenaStatus = isApnea;
 
-                            // 移動平均の値のリストに追加
-                            movingAverageValues.Add(y);
-                            if (movingAverageValues.Count > MovingAveragePeriod)
+                            // ----------------------------------------------------
+                            // 座標データの作成
+                            // ----------------------------------------------------
+                            (DateTime time, int value) coordinate;
+                            try
                             {
-                                // 件数を超える場合は、最初の値を移動平均の値のリストから削除
-                                movingAverageValues.RemoveAt(0);
+                                int x = data.Item2;
+                                int y = data.Item3;
+                                int z = data.Item4;
+
+                                // 初回は、データの時刻を最終時刻として設定
+                                if (lastTime == null)
+                                {
+                                    lastTime = new DateTime(time.Year, time.Month, time.Day, time.Hour, time.Minute, time.Second);
+                                }
+                                nextTime = lastTime.Value.AddSeconds(PointSeconds);
+
+                                // ----------------------------------------------------
+                                // 移動平均の計算
+                                // ----------------------------------------------------
+                                // 移動平均の値のリストから指定時間より前のデータを削除
+                                var threshold = time.AddSeconds(MovingAveragePeriod * (-1));
+                                movingAverageValues.RemoveAll(v => v.Item1 < threshold);
+
+                                // 移動平均の値のリストに追加
+                                movingAverageValues.Add(new Tuple<DateTime, int>(time, y));
+
+                                // 移動平均の値の合算
+                                int sum = 0;
+                                foreach (var value in movingAverageValues)
+                                {
+                                    sum += value.Item2;
+                                }
+
+                                var val = sum / movingAverageValues.Count;
+                                // 移動平均の値で追加するDataPointを作成
+                                coordinate = (time, val);
+                            }
+                            finally
+                            {
                             }
 
-                            int valueCount = 0;
-                            int preValue = 0;
-                            bool first = true;
-                            foreach (var value in movingAverageValues)
+                            if (nextTime > time)
                             {
-                                sum += value;
-                                if (first)
-                                {
-                                    first = false;
-                                }
-                                else
-                                {
-                                    if (preValue != value)
-                                    {
-                                        valueCount++;
-                                    }
-                                }
-                                preValue = value;
-                            }
-
-                            if (valueCount < 2)
-                            {
-                                // 現在描画中のグラフがある場合は、グラフの参照を削除
-                                if (seriesBase != null || seriesApnea != null)
-                                {
-                                    Dispatcher.BeginInvoke(new Action(() =>
-                                    {
-                                        seriesBase = null;
-                                        seriesApnea = null;
-                                    }), DispatcherPriority.Background);
-                                }
-                                // 2回以上の値が変化していない場合は、無視する。
                                 continue;
                             }
 
+                            var timeMin = time.AddSeconds(AxisSecondsMinimum).ToOADate();
+                            var timeMax = time.AddSeconds(AxisSecondsMaximum).ToOADate();
+                            var newDataPoint = new DataPoint(coordinate.time.ToOADate(), coordinate.value);
+
+                            // UIスレッドでグラフ描画
                             Dispatcher.BeginInvoke(new Action(() =>
                             {
                                 if (seriesBase == null)
@@ -203,45 +206,44 @@ namespace apnea_demo
                                     seriesBase = new LineSeries { Color = OxyColors.Black };
                                     PlotModel.Series.Add(seriesBase);
                                 }
-                            }), DispatcherPriority.Background);
 
-                            val = sum / movingAverageValues.Count;
-
-                            // 移動平均の値で追加するDataPointを作成
-                            var newDataPoint = new DataPoint(time, val);
-
-                            // UIスレッドでグラフ描画
-                            Dispatcher.BeginInvoke(new Action(() =>
-                            {
-                                // グラフにデータを追加
-                                seriesBase?.Points.Add(newDataPoint);
-                                // 無呼吸状態の場合は、無呼吸のグラフにもデータを追加
-                                seriesApnea?.Points.Add(newDataPoint);
-
-                                // オートスクロールの場合は、X軸の範囲を更新
-                                if (IsAutoScroll)
+                                if (nextTime > time)
                                 {
-                                    foreach (var axis in PlotModel.Axes)
+                                    if (seriesBase.Points.Count > 0)
                                     {
-                                        // X軸の設定を検索
-                                        if (axis.Position == AxisPosition.Bottom)
-                                        {
-                                            // X軸の範囲を更新
-                                            axis.Minimum = timeMin;
-                                            axis.Maximum = timeMax;
-                                            break;
-                                        }
+                                        seriesBase?.Points.RemoveAt(seriesBase.Points.Count - 1);
                                     }
                                 }
+                                seriesBase?.Points.Add(newDataPoint);
 
-                                // X軸の範囲から外れたデータを削除
-                                var series = (LineSeries?)PlotModel.Series.FirstOrDefault();
-                                if (series != null)
+                                if (time >= nextTime)
                                 {
-                                    var lastDataPoint = series.Points.Last();
-                                    if (lastDataPoint.X < timeMin)
+                                    //Debug.WriteLine($"next: {nextTime} time: {time}.{time.Millisecond,D3} {coordinate.value,5} Count: {movingAverageValues.Count}");  // コンソールに受信データを出力
+                                    // オートスクロールの場合は、X軸の範囲を更新
+                                    if (IsAutoScroll)
                                     {
-                                        PlotModel.Series.Remove(series);
+                                        foreach (var axis in PlotModel.Axes)
+                                        {
+                                            // X軸の設定を検索
+                                            if (axis.Position == AxisPosition.Bottom)
+                                            {
+                                                // X軸の範囲を更新
+                                                axis.Minimum = timeMin;
+                                                axis.Maximum = timeMax;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    // X軸の範囲から外れたデータを削除
+                                    var series = (LineSeries?)PlotModel.Series.FirstOrDefault();
+                                    if (series != null)
+                                    {
+                                        var lastDataPoint = series.Points.Last();
+                                        if (lastDataPoint.X < timeMin)
+                                        {
+                                            PlotModel.Series.Remove(series);
+                                        }
                                     }
                                 }
 
@@ -254,11 +256,11 @@ namespace apnea_demo
                             // 無呼吸の判定ロジック
                             // ----------------------------------------------------
                             // 現在のラインのデータが2点以上の場合
-                            if (currentLineDataPoints.Count >= 2)
+                            if (currentLine.Count >= 2)
                             {
                                 // 現在のラインのデータの最初の点と最後の点を取得
-                                var firstDataPoint = currentLineDataPoints.FirstOrDefault();
-                                var lastDataPoint = currentLineDataPoints.LastOrDefault();
+                                var firstDataPoint = currentLine.FirstOrDefault();
+                                var lastDataPoint = currentLine.LastOrDefault();
 
                                 if (lastDataPoint.Y != newDataPoint.Y)// 前回のデータと同じ値の場合はラインの向きに変化がないものとして無視する。
                                 {
@@ -274,55 +276,35 @@ namespace apnea_demo
                                         var hight = lastDataPoint.Y - firstDataPoint.Y;
                                         var abs = Math.Abs(hight); // 上下した振幅の幅を取得
                                         isApnea = ApneaThreshold > abs;   // 無呼吸の状態を更新
-                                        Debug.WriteLine($"Hight: {hight,5} Direct: {lineDirect,-5} Abs:{abs,4} Apnea: {isApnea}");  // コンソールに受信データを出力
+                                        Debug.WriteLine($"{time:HH:mm:ss.fff} {lastDataPoint.Y,5} Hight: {hight,5} Direct: {(lineDirect ? "up" : "down"),-4} Apnea: {isApnea}");  // コンソールに受信データを出力
 
                                         // 無呼吸の状態ではない場合は、ラインの向きを判定して無呼吸の判定を行う。
-                                        if (!finalApenaStatus)
+                                        if (!preApenaStatus)
                                         {
                                             // 無呼吸となった場合
                                             if (isApnea)
                                             {
                                                 // グラフの描画をUIスレッドに依頼するため、現在のラインを退避
-                                                var apneaDataPoints = currentLineDataPoints;
-                                                // 今回のデータを無呼吸として描画するために追加する。
-                                                apneaDataPoints.Add(newDataPoint);
-
+                                                var apneaDataLine = currentLine;
 
                                                 // グラフの描画をUIスレッドに依頼
                                                 Dispatcher.BeginInvoke(new Action(() =>
                                                 {
                                                     // 新しく無呼吸のラインを追加
-                                                    seriesApnea = new LineSeries { Color = OxyColors.Red };
-                                                    PlotModel.Series.Add(seriesApnea);
+                                                    var apnea = new LineSeries { StrokeThickness = 3, Color = OxyColors.Red };
+                                                    PlotModel.Series.Add(apnea);
 
                                                     // 無呼吸グラフにデータを追加
-                                                    foreach (var dataPoint in apneaDataPoints)
+                                                    foreach (var dataPoint in apneaDataLine)
                                                     {
-                                                        seriesApnea.Points.Add(dataPoint);
+                                                        apnea.Points.Add(dataPoint);
                                                     }
                                                     // グラフを再描画
                                                     PlotModel.InvalidatePlot(true);
+
                                                 }), DispatcherPriority.Background);
                                             }
-                                        }
-
-                                        // 方向が変わったので、これまでのラインの終了点を開始点として現在のラインのデータを新しく作成する。
-                                        currentLineDataPoints =
-                                        [
-                                            lastDataPoint,
-                                        ];
-                                    }
-                                    else
-                                    {
-                                        // 方向が変わっっていない場合
-                                        // 無呼吸の状態の場合は、閾値超えた時に無呼吸の判定を解除する。
-                                        if (finalApenaStatus)
-                                        {
-                                            // 開始点と現在の点の振幅が閾値を超えた場合は無呼吸の判定を解除
-                                            var abs = Math.Abs(newDataPoint.Y - firstDataPoint.Y); // 上下した振幅の幅を取得
-                                            isApnea = ApneaThreshold > abs;   // 無呼吸の状態を更新
-                                            // 無呼吸の状態が解除された場合
-                                            if (!isApnea)
+                                            else
                                             {
                                                 // UIスレッドに依頼
                                                 Dispatcher.BeginInvoke(new Action(() =>
@@ -332,14 +314,64 @@ namespace apnea_demo
                                                 }), DispatcherPriority.Background);
                                             }
                                         }
+
+                                        // 方向が変わったので、これまでのラインの終了点を開始点として現在のラインのデータを新しく作成する。
+                                        currentLine =
+                                        [
+                                            lastDataPoint,
+                                        ];
+                                    }
+
+                                    // 無呼吸の状態の場合は、閾値超えた時に無呼吸の判定を解除する。
+                                    if (isApnea)
+                                    {
+                                        // 開始点と現在の点の振幅が閾値を超えた場合は無呼吸の判定を解除
+                                        var abs = Math.Abs(newDataPoint.Y - firstDataPoint.Y); // 上下した振幅の幅を取得
+                                        isApnea = ApneaThreshold > abs;   // 無呼吸の状態を更新
+                                                                          // 無呼吸の状態が解除された場合
+                                        if (!isApnea)
+                                        {
+                                            // UIスレッドに依頼
+                                            Dispatcher.BeginInvoke(new Action(() =>
+                                            {
+                                                // 無呼吸のラインを終了
+                                                seriesApnea = null;
+                                            }), DispatcherPriority.Background);
+                                        }
                                     }
                                 }
                             }
+
                             // 現在のデータを追加
-                            currentLineDataPoints.Add(newDataPoint);
+                            currentLine.Add(newDataPoint);
+
+                            // 無呼吸状態の場合は、無呼吸のグラフにもデータを追加
+                            if (isApnea)
+                            {
+                                // UIスレッドでグラフ描画
+                                Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    if (seriesApnea == null)
+                                    {
+                                        seriesApnea = new LineSeries { StrokeThickness = 4, Color = OxyColors.Red };
+                                        PlotModel.Series.Add(seriesApnea);
+                                    }
+                                    // 無呼吸グラフにデータを追加
+                                    seriesApnea.Points.Add(newDataPoint);
+                                    // グラフを再描画
+                                    PlotModel.InvalidatePlot(true);
+                                }), DispatcherPriority.Background);
+                            }
                         }
                         finally
                         {
+                            lastTime = new DateTime(time.Year, time.Month, time.Day, time.Hour, time.Minute, time.Second);
+                            var denominator = (int)(PointSeconds * 1000);
+                            var mill = time.Millisecond / denominator;
+                            if (mill > 0)
+                            {
+                                lastTime = lastTime.Value.AddMilliseconds(denominator * mill);
+                            }
                         }
                     }
                 }
@@ -414,11 +446,11 @@ namespace apnea_demo
                         }
                     }
                 }
-                catch (Exception e)
+                catch (Exception)
                 {
                     // 接続失敗時の処理
                     Debug.WriteLine($"DetectDevice Error {port}");
-                    Debug.WriteLine(e);
+                    // Debug.WriteLine(e);
                 }
             }
         }
@@ -524,6 +556,56 @@ namespace apnea_demo
                     {
                         break;
                     }
+                    else if (line.Contains("version"))
+                    {
+                        continue;
+                    }
+                    else if (line.Contains("Atmel:"))
+                    {
+                        continue;
+                    }
+                    else if (line.Contains("ID :"))
+                    {
+                        continue;
+                    }
+                    else if (line.Contains(" MB "))
+                    {
+                        continue;
+                    }
+                    else if (line.Contains(" KB "))
+                    {
+                        continue;
+                    }
+                    else if (line.Contains("sample "))
+                    {
+                        continue;
+                    }
+                    else if (line.Contains("acc "))
+                    {
+                        continue;
+                    }
+                    else if (line.Contains("ACC"))
+                    {
+                        continue;
+                    }
+                    else if (line.Contains("X,Y,Z"))
+                    {
+                        return;
+                    }
+                    else
+                    {
+                        const string PATTERN = @"([0-9\+\-\,]+),([0-9\+\-\,]+),([0-9\+\-\,]+)";
+                        Match match = Regex.Match(line, PATTERN);
+                        if (match.Success)
+                        {
+                            int x = int.Parse(match.Groups[1].Value);
+                            int y = int.Parse(match.Groups[2].Value);
+                            int z = int.Parse(match.Groups[3].Value);
+
+                            _dataQueue.Enqueue(new Tuple<DateTime, int, int, int>(item1: DateTime.Now, x, y, z));
+                            return;
+                        }
+                    }
                 }
 
                 serialPort.ReadTimeout = 1000;
@@ -566,6 +648,8 @@ namespace apnea_demo
                 while (true)
                 {
                     var line = serialPort.ReadLine();
+                    var now = DateTime.Now;
+
                     Match match = Regex.Match(line, PATTERN);
                     if (match.Success)
                     {
@@ -573,7 +657,7 @@ namespace apnea_demo
                         int y = int.Parse(match.Groups[2].Value);
                         int z = int.Parse(match.Groups[3].Value);
                         //Debug.WriteLine($"Received: {line} => {x}, {y}, {z}");  // コンソールに受信データを出力
-                        _dataQueue.Enqueue(new Tuple<int, int, int>(x, y, z));
+                        _dataQueue.Enqueue(new Tuple<DateTime, int, int, int>(now, x, y, z));
                     }
                     else
                     {
