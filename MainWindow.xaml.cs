@@ -5,19 +5,97 @@ using RJCP.IO.Ports;
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Windows.Media;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Threading;
+using System;
+using System.Windows.Controls;
+using System.Globalization;
+using System.Windows.Data;
 
 namespace apnea_demo
 {
+    public class MinHeightConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            double actualHeight = (double)value;
+            var height = Math.Max(500, actualHeight - 225); // ウィンドウの70%を使用しつつ、最低500を保証
+            Debug.WriteLine($"MinHeightConverter: {height} : {actualHeight}");
+            return height;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        {
+            throw new NotSupportedException("This converter only works for one-way binding.");
+        }
+    }
+
     /// <summary>
     /// Interaction logic for MainWindow.xaml
     /// </summary>
     public partial class MainWindow : Window, INotifyPropertyChanged
     {
+        // データの時間間隔
+        public double PointSeconds { get; set; } = 0.5; //（秒）
+
+        // 移動平均の時間（秒）
+        public double MovingAveragePeriod { get; set; } = 1.2; //（秒）
+
+        // 無呼吸の閾値
+        public int ApneaThreshold { get; set; } = 100;
+
+        // ラインの太さ
+        public int StrokeThickness { get; set; } = 2; //（ピクセル）
+
+        // 無呼吸ラインの太さ
+        public int ApneaStrokeThickness { get; set; } = 4; //（ピクセル）
+
+        // X軸の最大表示時間
+        public int AxisSecondsMaximum { get; set; } = 60; //（秒）
+
+        // X軸の最小表示時間
+        public int AxisSecondsMinimum { get; set; } = -240; //（秒）
+
+        // Y軸の最大値
+        public int AxisValueMaximum { get; set; } = 5000;
+
+        // Y軸の最小値
+        public int AxisValueMinimum { get; set; } = -2000;
+
+        // LED表示の更新間隔
+        public double LedDisplayInterval { get; set; } = 0.5; //（秒）
+
+        // デバイス検出のポーリング間隔
+        public double DeviceDetectPollingSeconds { get; set; } = 1.0; //（秒）
+
+        // デバイスの生存確認ポーリング間隔
+        public double DevicePollingSeconds { get; set; } = 3.0; //（秒）
+
+        // シリアルポートの書き込みタイムアウト
+        public double SerialPortWriteTimeout { get; set; } = 0.5; //（秒）
+
+        // シリアルポートの書き込みタイムアウト
+        public double SerialPortReadTimeout { get; set; } = 0.5; //（秒）
+
+        // 改行コード
+        public string NewLine { get; set; } = "\r\n"; 
+
+
+
+        public PlotModel PlotModel { get; set; }
+
+        private bool _autoScroll = true;
+        public bool IsAutoScroll
+        {
+            get { return _autoScroll; }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
         private CancellationTokenSource _cancellationTokenSource;
 
         private string _deviceInfo;
@@ -34,29 +112,56 @@ namespace apnea_demo
             }
         }
 
-        public double PointSeconds { get; set; } = 0.5;
-
-        public double MovingAveragePeriod { get; set; } = 1.2;
-
-        public int ApneaThreshold { get; set; } = 100;
-
-        public PlotModel PlotModel { get; set; }
-
-        public int AxisSecondsMaximum { get; set; } = 60;
-
-        public int AxisSecondsMinimum { get; set; } = -240;
-
-        public int AxisValueMaximum { get; set; } = 5000;
-
-        public int AxisValueMinimum { get; set; } = -2000;
-
-        private bool _autoScroll = true;
-        public bool IsAutoScroll
+        private List<string> _deviceLogList = new List<string>();
+        private string _deviceLogs;
+        public string DeviceLogs
         {
-            get { return _autoScroll; }
+            get { return _deviceLogs; }
+            set
+            {
+                _deviceLogList.Add(value);
+                if (_deviceLogList.Count > 100)
+                {
+                    _deviceLogList.RemoveAt(0);
+                }
+
+                _deviceLogs = string.Empty;
+                foreach (var log in _deviceLogList)
+                {
+                    _deviceLogs += log + NewLine;
+                }
+                OnPropertyChanged();
+            }
         }
 
-        public event PropertyChangedEventHandler? PropertyChanged;
+        private Brush _connectionStatusColor = Brushes.Red; // 初期状態は通常「未接続」を示す緑色
+        public Brush ConnectionStatusColor
+        {
+            get => _connectionStatusColor;
+            set
+            {
+                if (_connectionStatusColor != value)
+                {
+                    _connectionStatusColor = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+        private DateTime _lastTime;
+
+        private string _connectionStatus;
+        public string ConnectionStatus
+        {
+            get { return _connectionStatus; }
+            set
+            {
+                if (_connectionStatus != value)
+                {
+                    _connectionStatus = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
 
         private ConcurrentQueue<Tuple<DateTime, int, int, int>> _dataQueue = new ConcurrentQueue<Tuple<DateTime, int, int, int>>();
 
@@ -64,6 +169,37 @@ namespace apnea_demo
         protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        // 通信状態の更新メソッド
+        private void ToggleConnectionColor()
+        {
+            var now = DateTime.Now;
+
+            if (now - _lastTime > TimeSpan.FromSeconds(LedDisplayInterval))
+            {
+                _lastTime = now;
+                if (ConnectionStatusColor != Brushes.Green)
+                {
+                    ConnectionStatusColor = Brushes.Green;
+                }
+                else
+                {
+                    ConnectionStatusColor = Brushes.Blue;
+                }
+            }
+        }
+
+        public void UpdateConnectionStatus(bool isConnected)
+        {
+            if (!isConnected)
+            {
+                ConnectionStatusColor = Brushes.Red;  // タイムアウトの場合は赤色
+            }
+            else
+            {
+                ToggleConnectionColor();
+            }
         }
 
         public MainWindow()
@@ -94,13 +230,18 @@ namespace apnea_demo
             });
 
             _deviceInfo = string.Empty;
+            _deviceLogs = string.Empty;
+            _connectionStatus = string.Empty;
 
             DataContext = this;
+
+            _lastTime = now;
+
+            _cancellationTokenSource = new CancellationTokenSource();
 
             Loaded += MainWindow_Loaded;
             Unloaded += MainWindow_Unloaded;
 
-            _cancellationTokenSource = new CancellationTokenSource();
         }
 
         private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -114,6 +255,13 @@ namespace apnea_demo
         {
             _cancellationTokenSource?.Cancel();
         }
+
+        private void LogsTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            // スクロールバーをテキストボックスの末尾に移動させる
+            LogsTextBox.ScrollToEnd();
+        }
+
 
         private void StartPlottingTask(CancellationToken cancellationToken)
         {
@@ -203,7 +351,7 @@ namespace apnea_demo
                             {
                                 if (seriesBase == null)
                                 {
-                                    seriesBase = new LineSeries { Color = OxyColors.Black };
+                                    seriesBase = new LineSeries { StrokeThickness = StrokeThickness, Color = OxyColors.Black };
                                     PlotModel.Series.Add(seriesBase);
                                 }
 
@@ -291,7 +439,7 @@ namespace apnea_demo
                                                 Dispatcher.BeginInvoke(new Action(() =>
                                                 {
                                                     // 新しく無呼吸のラインを追加
-                                                    var apnea = new LineSeries { StrokeThickness = 3, Color = OxyColors.Red };
+                                                    var apnea = new LineSeries { StrokeThickness = ApneaStrokeThickness, Color = OxyColors.Red };
                                                     PlotModel.Series.Add(apnea);
 
                                                     // 無呼吸グラフにデータを追加
@@ -353,7 +501,7 @@ namespace apnea_demo
                                 {
                                     if (seriesApnea == null)
                                     {
-                                        seriesApnea = new LineSeries { StrokeThickness = 4, Color = OxyColors.Red };
+                                        seriesApnea = new LineSeries { StrokeThickness = ApneaStrokeThickness, Color = OxyColors.Red };
                                         PlotModel.Series.Add(seriesApnea);
                                     }
                                     // 無呼吸グラフにデータを追加
@@ -382,9 +530,11 @@ namespace apnea_demo
         {
             Task.Run(() =>
             {
+                var interval = (int)(DeviceDetectPollingSeconds * 1000);
+
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    Thread.Sleep(1000); // 1秒ごとにチェック
+                    Thread.Sleep(interval); // 1秒ごとにチェック
 
                     DetectDevice();
                 }
@@ -401,11 +551,15 @@ namespace apnea_demo
                 {
                     Debug.WriteLine($"Device Detect {port}");
                     SerialPortStream serialPort = new SerialPortStream(port, 38400);
-                    serialPort.WriteTimeout = 500;
-                    serialPort.ReadTimeout = 500;
+                    serialPort.WriteTimeout = (int)(SerialPortWriteTimeout * 1000);
+                    serialPort.ReadTimeout = (int)(SerialPortReadTimeout * 1000);
                     serialPort.Encoding = Encoding.UTF8;
-                    serialPort.NewLine = "\r\n";
+                    serialPort.NewLine = NewLine;
                     serialPort.Open();
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        DeviceLogs = $"{port}に接続を試みます。";
+                    }), DispatcherPriority.Background);
 
                     try
                     {
@@ -420,22 +574,47 @@ namespace apnea_demo
                         }
 
                         id = GetDeviceId(serialPort);
-                        version = GetVersion(serialPort);
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = $"DEVICE ID {id}";
+                        }), DispatcherPriority.Background);
 
-                        Dispatcher.Invoke(() =>
+                        version = GetVersion(serialPort);
+                        Dispatcher.BeginInvoke(new Action(() =>
                         {
                             // ここで受信データをグラフに追加するなどのUI更新を行う
                             DeviceInfo = $"ID {id} {version}";
-                        });
+                            DeviceLogs = $"VERSION {version}";
+
+                            DeviceLogs = $"{port}に接続しました。";
+                        }), DispatcherPriority.Background);
 
                         while (true)
                         {
                             DebugModeEnter(serialPort);
 
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                ConnectionStatus = $"データを受信するまで待っています。";
+                            }), DispatcherPriority.Background);
                             WaitForReStart(serialPort);
 
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                ConnectionStatus = $"データを受信しています。";
+                            }), DispatcherPriority.Background);
                             ReceivedData(serialPort);
                         }
+                    }
+                    catch (TimeoutException)
+                    {
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = $"{port}との接続が切れました。";
+                            ConnectionStatus = $"{port}との接続が切れました。";
+                            // タイムアウト時の処理
+                            UpdateConnectionStatus(false);
+                        }), DispatcherPriority.Background);
                     }
                     finally
                     {
@@ -468,6 +647,11 @@ namespace apnea_demo
                 Match match = Regex.Match(line, PATTERN);
                 if (match.Success)
                 {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        // 受信を確認したことを示すため、通信状態を更新
+                        UpdateConnectionStatus(true);
+                    }), DispatcherPriority.Background);
                     return match.Groups[1].Value;
                 }
             }
@@ -490,6 +674,11 @@ namespace apnea_demo
                 Match match = Regex.Match(line, PATTERN_TI);
                 if (match.Success)
                 {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        // 受信を確認したことを示すため、通信状態を更新
+                        UpdateConnectionStatus(true);
+                    }), DispatcherPriority.Background);
                     ti = match.Groups[1].Value;
                     break;
                 }
@@ -514,83 +703,124 @@ namespace apnea_demo
         {
             const string COMMAND = "DEBUG";
 
-            try
+            while (true)
             {
+                serialPort.WriteLine(COMMAND);
                 while (true)
                 {
-                    serialPort.WriteLine(COMMAND);
-                    while (true)
+                    var line = serialPort.ReadLine();
+                    Debug.WriteLine($"Received: {line}");  // コンソールに受信データを出力
+                    Dispatcher.BeginInvoke(new Action(() =>
                     {
-                        var line = serialPort.ReadLine();
-                        Debug.WriteLine($"Received: {line}");  // コンソールに受信データを出力
-                        if (line.Contains("Debug mode Enter."))
-                        {
-                            return;
-                        }
-                        else if (line.Contains("Debug mode Exit."))
-                        {
-                            break;
-                        }
+                        DeviceLogs = $"{line}";
+                        // 受信を確認したことを示すため、通信状態を更新
+                        UpdateConnectionStatus(true);
+                    }), DispatcherPriority.Background);
+
+                    if (line.Contains("Debug mode Enter."))
+                    {
+                        return;
+                    }
+                    else if (line.Contains("Debug mode Exit."))
+                    {
+                        break;
                     }
                 }
-            }
-            catch (TimeoutException)
-            {
-                // タイムアウト時の処理
             }
         }
 
         private void WaitForReStart(SerialPortStream serialPort)
         {
             const string COMMAND = "ACC";
+            var WAIT_MILLISECONDS = (int)(DevicePollingSeconds * 1000);
 
             int readTimeout = serialPort.ReadTimeout;
-            serialPort.ReadTimeout = -1;
-            try
+            while (true)
             {
-                while (true)
+                serialPort.ReadTimeout = WAIT_MILLISECONDS;
+                try
                 {
                     var line = serialPort.ReadLine();
                     Debug.WriteLine($"Received: {line}");  // コンソールに受信データを出力
                     if (line.Contains("SerialCommunicator start."))
                     {
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = line;
+                            // 受信を確認したことを示すため、通信状態を更新
+                            UpdateConnectionStatus(true);
+                        }), DispatcherPriority.Background);
                         break;
                     }
                     else if (line.Contains("version"))
                     {
-                        continue;
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = line;
+                            // 受信を確認したことを示すため、通信状態を更新
+                            UpdateConnectionStatus(true);
+                        }), DispatcherPriority.Background);
+                        break;
                     }
                     else if (line.Contains("Atmel:"))
                     {
-                        continue;
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = line;
+                            // 受信を確認したことを示すため、通信状態を更新
+                            UpdateConnectionStatus(true);
+                        }), DispatcherPriority.Background);
+                        break;
                     }
                     else if (line.Contains("ID :"))
                     {
-                        continue;
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = line;
+                            // 受信を確認したことを示すため、通信状態を更新
+                            UpdateConnectionStatus(true);
+                        }), DispatcherPriority.Background);
+                        break;
                     }
                     else if (line.Contains(" MB "))
                     {
-                        continue;
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = line;
+                            // 受信を確認したことを示すため、通信状態を更新
+                            UpdateConnectionStatus(true);
+                        }), DispatcherPriority.Background);
+                        break;
                     }
                     else if (line.Contains(" KB "))
                     {
-                        continue;
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = line;
+                            // 受信を確認したことを示すため、通信状態を更新
+                            UpdateConnectionStatus(true);
+                        }), DispatcherPriority.Background);
+                        break;
                     }
                     else if (line.Contains("sample "))
                     {
-                        continue;
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = line;
+                            // 受信を確認したことを示すため、通信状態を更新
+                            UpdateConnectionStatus(true);
+                        }), DispatcherPriority.Background);
+                        break;
                     }
                     else if (line.Contains("acc "))
                     {
-                        continue;
-                    }
-                    else if (line.Contains("ACC"))
-                    {
-                        continue;
-                    }
-                    else if (line.Contains("X,Y,Z"))
-                    {
-                        return;
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            DeviceLogs = line;
+                            // 受信を確認したことを示すため、通信状態を更新
+                            UpdateConnectionStatus(true);
+                        }), DispatcherPriority.Background);
+                        break;
                     }
                     else
                     {
@@ -603,24 +833,44 @@ namespace apnea_demo
                             int z = int.Parse(match.Groups[3].Value);
 
                             _dataQueue.Enqueue(new Tuple<DateTime, int, int, int>(item1: DateTime.Now, x, y, z));
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                // 受信を確認したことを示すため、通信状態を更新
+                                UpdateConnectionStatus(true);
+                            }), DispatcherPriority.Background);
                             return;
                         }
                     }
                 }
-
-                serialPort.ReadTimeout = 1000;
-                try
-                {
-                    while (true)
-                    {
-                        var line = serialPort.ReadLine();
-                        Debug.WriteLine($"Received: {line}");  // コンソールに受信データを出力
-                    }
-                }
                 catch (TimeoutException)
                 {
-                    // タイムアウト時の処理
                 }
+                finally
+                {
+                    serialPort.ReadTimeout = readTimeout;
+                }
+
+                GetDeviceId(serialPort);
+            }
+
+            serialPort.ReadTimeout = WAIT_MILLISECONDS;
+            try
+            {
+                while(true)
+                {
+                    var line = serialPort.ReadLine();
+                    Debug.WriteLine($"Received: {line}");  // コンソールに受信データを出力
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        DeviceLogs = line;
+                        // 受信を確認したことを示すため、通信状態を更新
+                        UpdateConnectionStatus(true);
+                    }), DispatcherPriority.Background);
+                }
+            }
+            catch (TimeoutException)
+            {
+                // タイムアウト時の処理
             }
             finally
             {
@@ -632,8 +882,19 @@ namespace apnea_demo
             {
                 var line = serialPort.ReadLine();
                 Debug.WriteLine($"Received: {line}");  // コンソールに受信データを出力
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    DeviceLogs = line;
+                    // 受信を確認したことを示すため、通信状態を更新
+                    UpdateConnectionStatus(true);
+                }), DispatcherPriority.Background);
+
                 if (line.Contains("X,Y,Z"))
                 {
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        DeviceLogs = $"ADC Start!";
+                    }), DispatcherPriority.Background);
                     break;
                 }
             }
@@ -641,8 +902,12 @@ namespace apnea_demo
 
         public void ReceivedData(SerialPortStream serialPort)
         {
+            const int WAIT_MILLISECONDS = 1000;
+
             const string PATTERN = @"([0-9\+\-\,]+),([0-9\+\-\,]+),([0-9\+\-\,]+)";
 
+            int readTimeout = serialPort.ReadTimeout;
+            serialPort.ReadTimeout = WAIT_MILLISECONDS;
             try
             {
                 while (true)
@@ -658,16 +923,35 @@ namespace apnea_demo
                         int z = int.Parse(match.Groups[3].Value);
                         //Debug.WriteLine($"Received: {line} => {x}, {y}, {z}");  // コンソールに受信データを出力
                         _dataQueue.Enqueue(new Tuple<DateTime, int, int, int>(now, x, y, z));
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            // 受信を確認したことを示すため、通信状態を更新
+                            UpdateConnectionStatus(true);
+                        }), DispatcherPriority.Background);
                     }
                     else
                     {
-                        Debug.WriteLine($"Received: {line}");  // コンソールに受信データを出力
+                        if (line.Contains("ADC stop!."))
+                        {
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                DeviceLogs = line;
+                                ConnectionStatus = $"データが停止しました。";
+                                // 受信を確認したことを示すため、通信状態を更新
+                                UpdateConnectionStatus(true);
+                            }), DispatcherPriority.Background);
+                            break;
+                        }
+                        else
+                        {
+                            Debug.WriteLine($"Received: {line}");  // コンソールに受信データを出力
+                        }
                     }
                 }
             }
-            catch (TimeoutException)
+            finally
             {
-                // タイムアウト時の処理
+                serialPort.ReadTimeout = readTimeout;
             }
         }
     }

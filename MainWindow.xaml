@@ -7,29 +7,37 @@
         xmlns:local="clr-namespace:apnea_demo"
         mc:Ignorable="d"
         Title="MainWindow" Height="720" Width="1280">
+    <Window.Resources>
+        <local:MinHeightConverter x:Key="MinHeightConverter"/>
+    </Window.Resources>
     <DockPanel>
-        <StatusBar DockPanel.Dock="Bottom" Height="22" Background="Gray">
-            <StatusBarItem>
+        <StatusBar DockPanel.Dock="Bottom" Height="32" Background="Gray">
+            <StatusBar.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <DockPanel LastChildFill="True"/>
+                </ItemsPanelTemplate>
+            </StatusBar.ItemsPanel>
+            <StatusBarItem HorizontalAlignment="Left">
                 <StackPanel Orientation="Horizontal">
-                    <Ellipse Width="10" Height="10" Fill="{Binding ConnectionStatusColor}" Margin="10,0,0,0"/>
-                    <TextBlock Text="{Binding ConnectionStatus}" VerticalAlignment="Center"/>
+                    <Ellipse Width="20" Height="20" Fill="{Binding ConnectionStatusColor}" Margin="10,0,10,0"/>
+                    <TextBlock Text="{Binding ConnectionStatus}" VerticalAlignment="Center" Width="300"/>
                 </StackPanel>
             </StatusBarItem>
         </StatusBar>
-        <Grid DockPanel.Dock="Top" Height="150">
+        <oxy:PlotView Name="PlotView" Model="{Binding PlotModel}" DockPanel.Dock="Top" Height="{Binding Path=ActualHeight, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource MinHeightConverter}}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+        <Grid DockPanel.Dock="Top">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="2*"/>
             </Grid.ColumnDefinitions>
-            <StackPanel Grid.Column="0" Margin="10">
+            <StackPanel Grid.Column="0" Margin="20,0,10,10">
                 <Label Content="Device Info:" FontWeight="Bold"/>
-                <TextBlock Text="{Binding DeviceInfo}"/>
+                <TextBlock Text="{Binding DeviceInfo}" Margin="5,6,0,0"/>
             </StackPanel>
-            <StackPanel Grid.Column="1" Margin="10">
+            <StackPanel Grid.Column="1" Margin="0,0,20,0">
                 <Label Content="Logs:" FontWeight="Bold"/>
-                <TextBox Text="{Binding DeviceLogs}" Height="100" VerticalScrollBarVisibility="Auto" IsReadOnly="True"/>
+                <TextBox Name="LogsTextBox" Text="{Binding DeviceLogs}" Height="112" VerticalScrollBarVisibility="Auto" IsReadOnly="True" TextChanged="LogsTextBox_TextChanged"/>
             </StackPanel>
         </Grid>
-        <oxy:PlotView Name="PlotView" Model="{Binding PlotModel}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
     </DockPanel>
 </Window>
