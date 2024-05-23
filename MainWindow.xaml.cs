@@ -61,10 +61,10 @@ namespace apnea_demo
         public int AxisSecondsMinimum { get; set; } = -240; //（秒）
 
         // Y軸の最大値
-        public int AxisValueMaximum { get; set; } = 4500; // 5000;
+        public int AxisValueMaximum { get; set; } = 5000;
 
         // Y軸の最小値
-        public int AxisValueMinimum { get; set; } = 3000; //-2000;
+        public int AxisValueMinimum { get; set; } = -2000;
 
         // LED表示の更新間隔
         public double LedDisplayInterval { get; set; } = 0.5; //（秒）
@@ -219,6 +219,8 @@ namespace apnea_demo
                 IntervalLength = (60 * 2) / PointSeconds,  // 軸の間隔のピクセル数
                 Minimum = now.AddSeconds(AxisSecondsMinimum).ToOADate(),
                 Maximum = now.AddSeconds(AxisSecondsMaximum).ToOADate(),
+                IsZoomEnabled = false,
+                IsPanEnabled = false,
             });
             // Y軸の設定
             PlotModel.Axes.Add(new LinearAxis
@@ -226,7 +228,9 @@ namespace apnea_demo
                 Position = AxisPosition.Left,
                 Title = "Value",
                 Minimum = AxisValueMinimum,
-                Maximum = AxisValueMaximum
+                Maximum = AxisValueMaximum,
+                IsZoomEnabled = true,
+                IsPanEnabled = true,
             });
 
             _deviceInfo = string.Empty;
