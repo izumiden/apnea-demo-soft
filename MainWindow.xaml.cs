@@ -61,10 +61,10 @@ namespace apnea_demo
         public int AxisSecondsMinimum { get; set; } = -240; //（秒）
 
         // Y軸の最大値
-        public int AxisValueMaximum { get; set; } = 5000;
+        public int AxisValueMaximum { get; set; } = 4500; // 5000;
 
         // Y軸の最小値
-        public int AxisValueMinimum { get; set; } = -2000;
+        public int AxisValueMinimum { get; set; } = 3000; //-2000;
 
         // LED表示の更新間隔
         public double LedDisplayInterval { get; set; } = 0.5; //（秒）
@@ -298,7 +298,7 @@ namespace apnea_demo
                             // ----------------------------------------------------
                             // 座標データの作成
                             // ----------------------------------------------------
-                            (DateTime time, int value) coordinate;
+                            (DateTime time, double value) coordinate;
                             try
                             {
                                 int x = data.Item2;
@@ -329,7 +329,12 @@ namespace apnea_demo
                                     sum += value.Item2;
                                 }
 
-                                var val = sum / movingAverageValues.Count;
+                                double val = sum / movingAverageValues.Count;
+                                // 常用対数に変換
+                                val = Math.Log10(val);
+                                // そのままではグラフに表示できないので、適当に調整
+                                val *= 5000;
+                                val -= 14000;
                                 // 移動平均の値で追加するDataPointを作成
                                 coordinate = (time, val);
                             }
